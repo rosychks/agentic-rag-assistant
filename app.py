@@ -254,7 +254,24 @@ def chat_fn(question, history):
     return f"{r['generation']}\n\n*шаги: {steps_str}*"
 
 
-demo = gr.ChatInterface(chat_fn, title="Agentic RAG Assistant")
+demo = gr.ChatInterface(
+    chat_fn,
+    title="Agentic RAG Assistant",
+    description=(
+        "Задайте вопрос по книге NASA/Stanford Solar Center «Our Solar System — "
+        "Ancient Worlds, New Discoveries»: о Солнце, планетах, их спутниках, "
+        "астероидах, кометах и явлениях космической погоды. "
+        "Если ответа нет в документе, бот попробует поискать в интернете "
+        "или честно скажет, что не знает."
+    ),
+    examples=[
+        "Что такое солнечные пятна и как часто они появляются?",
+        "Что такое корона и солнечный ветер?",
+        "Расскажи про кольца Сатурна",
+        "Сколько спутников у Марса?",
+        "Что показал спутник SOHO?",
+    ],
+)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))

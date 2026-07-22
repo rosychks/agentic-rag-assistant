@@ -1,0 +1,10 @@
+langgraph
+langchain
+langchain-openai
+langchain-community
+qdrant-client
+langchain-qdrant
+pymupdf
+gradio
+pandas
+pillow

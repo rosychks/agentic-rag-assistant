@@ -57,46 +57,41 @@ def caption_image(png_bytes, retries=5):
     return "(не удалось получить описание — лимит токенов)"
 
 
-def ingest_pdf(path, max_pages=8):
-    docs = []
-    pdf = fitz.open(path)
-    n_pages = min(max_pages, pdf.page_count)
-    for page in pdf[:n_pages]:
-        text = page.get_text()
-        if text.strip():
-            docs.append(Document(page_content=text, metadata={"source": path, "page": page.number}))
-        for img in page.get_images():
-            xref = img[0]
-            base_image = pdf.extract_image(xref)
-            caption = caption_image(base_image["image"])
-            docs.append(Document(page_content=f"[Image] {caption}", metadata={"source": path, "page": page.number}))
-            time.sleep(1)
-    return docs
 
-
-print("Индексирую PDF, это займёт немного времени при старте...")
-all_docs = ingest_pdf(PDF_PATH, max_pages=8)
-print("Собрано документов (текст+картинки):", len(all_docs))
 
 # ---------------------------------------------------------------------------
-# 2. Чанкинг + эмбеддинги + Qdrant (in-memory)
+# 2. Чанкинг + эмбеддинги + Qdrant (локальный диск — переживает "сон" сервиса,
+#    но обнуляется при новом деплое)
 # ---------------------------------------------------------------------------
-chunks = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150).split_documents(all_docs)
-print("Чанков получилось:", len(chunks))
-
 embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 
-qdrant_client = QdrantClient(":memory:")
-qdrant_client.create_collection(
-    collection_name="docs",
-    vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
-)
+QDRANT_PATH = os.path.join(os.path.dirname(__file__), "qdrant_data")
+qdrant_client = QdrantClient(path=QDRANT_PATH)
 
-vectorstore = QdrantVectorStore(client=qdrant_client, collection_name="docs", embedding=embeddings)
-vectorstore.add_documents(chunks)
+collection_exists = qdrant_client.collection_exists("docs")
 
-retriever = vectorstore.as_retriever(search_kwargs={"k": 8})
+if not collection_exists:
+    print("Коллекция не найдена — индексирую PDF заново (это займёт время)...")
+    all_docs = ingest_pdf(PDF_PATH, max_pages=46)
+    print("Собрано документов (текст+картинки):", len(all_docs))
+
+    chunks = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150).split_documents(all_docs)
+    print("Чанков получилось:", len(chunks))
+
+    qdrant_client.create_collection(
+        collection_name="docs",
+        vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
+    )
+    vectorstore = QdrantVectorStore(client=qdrant_client, collection_name="docs", embedding=embeddings)
+    vectorstore.add_documents(chunks)
+    print("Индексация завершена и сохранена на диск")
+else:
+    print("Найдена готовая коллекция на диске — пропускаю индексацию")
+    vectorstore = QdrantVectorStore(client=qdrant_client, collection_name="docs", embedding=embeddings)
+
+retriever = vectorstore.as_retriever(search_kwargs={"k": 12})
 print("Векторная база готова")
+
 
 # ---------------------------------------------------------------------------
 # 3. LangGraph агент

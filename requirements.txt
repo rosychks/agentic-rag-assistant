@@ -2,8 +2,8 @@ langgraph
 langchain
 langchain-openai
 langchain-community
-qdrant-client
-langchain-qdrant
+langchain-text-splitters
+rank_bm25
 pymupdf
 gradio
 pandas

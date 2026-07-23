@@ -1,4 +1,4 @@
-App · PY
+
 import os
 import io
 import time

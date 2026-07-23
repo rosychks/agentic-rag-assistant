@@ -1,3 +1,5 @@
+
+App · PY
 import os
 import io
 import time
@@ -27,7 +29,7 @@ if not os.environ.get("OPENAI_API_KEY"):
 # TAVILY_API_KEY опционален — без него web_search просто вернёт заглушку
  
 PDF_PATH = os.path.join(os.path.dirname(__file__), "test_document.pdf")
-
+ 
 # ---------------------------------------------------------------------------
 # 1. Ingest (текст + мультимодальные описания картинок)
 # ---------------------------------------------------------------------------
@@ -135,6 +137,9 @@ grader = grade_prompt | llm.with_structured_output(YesNo)
  
 def retrieve(state):
     docs = retriever.invoke(state["question"])
+    print(f"[DEBUG retrieve] найдено документов: {len(docs)}")
+    for i, d in enumerate(docs):
+        print(f"[DEBUG retrieve] doc {i}: {d.page_content[:100]!r}")
     return {"documents": docs, "steps": state.get("steps", []) + ["retrieve"]}
  
  
@@ -142,9 +147,11 @@ def grade_documents(state):
     good_docs = []
     for d in state["documents"]:
         score = grader.invoke({"document": d.page_content, "question": state["question"]})
+        print(f"[DEBUG grade] score={score.binary_score!r} for doc: {d.page_content[:80]!r}")
         if score.binary_score == "yes":
             good_docs.append(d)
         time.sleep(1)
+    print(f"[DEBUG grade] прошло грейдинг: {len(good_docs)} из {len(state['documents'])}")
     return {"documents": good_docs, "steps": state["steps"] + ["grade_documents"]}
  
  
@@ -181,6 +188,9 @@ def generate(state):
         "недоступен" in d.page_content or len(d.page_content.strip()) < 15
         for d in context_docs
     )
+    print(f"[DEBUG generate] документов на входе: {len(context_docs)}, is_empty={is_empty}")
+    for i, d in enumerate(context_docs):
+        print(f"[DEBUG generate] doc {i} len={len(d.page_content.strip())}: {d.page_content[:100]!r}")
     if is_empty:
         return {
             "generation": "Не могу ответить на этот вопрос — в документах и веб-поиске не нашлось релевантной информации.",
@@ -285,3 +295,4 @@ demo = gr.ChatInterface(
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
     demo.launch(server_name="0.0.0.0", server_port=port)
+ 

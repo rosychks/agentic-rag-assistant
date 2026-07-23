@@ -128,7 +128,11 @@ class YesNo(BaseModel):
  
 grade_prompt = ChatPromptTemplate.from_template(
     "Документ:\n{document}\n\nВопрос: {question}\n\n"
-    "Релевантен ли документ вопросу? Ответь 'yes' или 'no'."
+    "Оцени, содержит ли документ ХОТЯ БЫ ЧАСТИЧНО полезную информацию по теме вопроса "
+    "(не обязательно исчерпывающий ответ — достаточно, чтобы документ был по той же теме "
+    "или мог помочь составить ответ). Будь снисходителен: если есть разумные сомнения "
+    "в релевантности, отвечай 'yes'. Отвечай 'no' только если документ совершенно не по теме. "
+    "Ответь 'yes' или 'no'."
 )
 grader = grade_prompt | llm.with_structured_output(YesNo)
  
@@ -150,6 +154,9 @@ def grade_documents(state):
             good_docs.append(d)
         time.sleep(1)
     print(f"[DEBUG grade] прошло грейдинг: {len(good_docs)} из {len(state['documents'])}")
+    if len(good_docs) == 0 and len(state["documents"]) > 0:
+        print("[DEBUG grade] грейдер отбраковал всё — использую топ-3 исходных документа как подушку безопасности")
+        good_docs = state["documents"][:3]
     return {"documents": good_docs, "steps": state["steps"] + ["grade_documents"]}
  
  

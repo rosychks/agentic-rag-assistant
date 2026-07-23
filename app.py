@@ -2,6 +2,7 @@ import os
 import io
 import time
 import base64
+import threading
  
 import fitz
 import gradio as gr
@@ -75,37 +76,49 @@ def ingest_pdf(path, max_pages=8):
  
  
 # ---------------------------------------------------------------------------
-# 2. Чанкинг + эмбеддинги + Qdrant (локальный диск — переживает "сон" сервиса,
-#    но обнуляется при новом деплое)
+# 2. Чанкинг + эмбеддинги + Qdrant — выполняется В ФОНОВОМ ПОТОКЕ,
+#    чтобы порт открывался сразу и Render не убивал деплой по таймауту.
 # ---------------------------------------------------------------------------
 embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
- 
 QDRANT_PATH = os.path.join(os.path.dirname(__file__), "qdrant_data")
-qdrant_client = QdrantClient(path=QDRANT_PATH)
  
-collection_exists = qdrant_client.collection_exists("docs")
+retriever = None
+indexing_ready = threading.Event()
+indexing_error = None
  
-if not collection_exists:
-    print("Коллекция не найдена — индексирую PDF заново (это займёт время)...")
-    all_docs = ingest_pdf(PDF_PATH, max_pages=46)
-    print("Собрано документов (текст+картинки):", len(all_docs))
  
-    chunks = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150).split_documents(all_docs)
-    print("Чанков получилось:", len(chunks))
+def build_index():
+    global retriever, indexing_error
+    try:
+        qdrant_client = QdrantClient(path=QDRANT_PATH)
+        collection_exists = qdrant_client.collection_exists("docs")
  
-    qdrant_client.create_collection(
-        collection_name="docs",
-        vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
-    )
-    vectorstore = QdrantVectorStore(client=qdrant_client, collection_name="docs", embedding=embeddings)
-    vectorstore.add_documents(chunks)
-    print("Индексация завершена и сохранена на диск")
-else:
-    print("Найдена готовая коллекция на диске — пропускаю индексацию")
-    vectorstore = QdrantVectorStore(client=qdrant_client, collection_name="docs", embedding=embeddings)
+        if not collection_exists:
+            print("Коллекция не найдена — индексирую PDF заново (это займёт время)...")
+            all_docs = ingest_pdf(PDF_PATH, max_pages=46)
+            print("Собрано документов (текст+картинки):", len(all_docs))
  
-retriever = vectorstore.as_retriever(search_kwargs={"k": 12})
-print("Векторная база готова")
+            chunks = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150).split_documents(all_docs)
+            print("Чанков получилось:", len(chunks))
+ 
+            qdrant_client.create_collection(
+                collection_name="docs",
+                vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
+            )
+            vectorstore = QdrantVectorStore(client=qdrant_client, collection_name="docs", embedding=embeddings)
+            vectorstore.add_documents(chunks)
+            print("Индексация завершена и сохранена на диск")
+        else:
+            print("Найдена готовая коллекция на диске — пропускаю индексацию")
+            vectorstore = QdrantVectorStore(client=qdrant_client, collection_name="docs", embedding=embeddings)
+ 
+        retriever = vectorstore.as_retriever(search_kwargs={"k": 12})
+        print("Векторная база готова")
+    except Exception as e:
+        indexing_error = str(e)
+        print(f"[ERROR] Индексация упала: {e}")
+    finally:
+        indexing_ready.set()
  
 # ---------------------------------------------------------------------------
 # 3. LangGraph агент
@@ -273,6 +286,10 @@ def invoke_with_retry(question, retries=6):
  
  
 def chat_fn(question, history):
+    if not indexing_ready.is_set():
+        return "Я ещё готовлюсь — индексирую книгу (обычно 5-15 минут при первом запуске). Попробуйте задать вопрос чуть позже."
+    if indexing_error:
+        return f"При подготовке базы знаний произошла ошибка: {indexing_error}. Попробуйте перезапустить сервис."
     r = invoke_with_retry(question)
     steps_str = " → ".join(r["steps"])
     return f"{r['generation']}\n\n*шаги: {steps_str}*"
@@ -298,6 +315,9 @@ demo = gr.ChatInterface(
 )
  
 if __name__ == "__main__":
+    indexing_thread = threading.Thread(target=build_index, daemon=True)
+    indexing_thread.start()
+ 
     port = int(os.environ.get("PORT", 7860))
     demo.launch(server_name="0.0.0.0", server_port=port)
  
